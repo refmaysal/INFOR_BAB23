@@ -1,0 +1,1835 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LMS Informatika Kelas 9 - Kurikulum Merdeka</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Google Font Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.3s ease-out forwards;
+        }
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.4); }
+            50% { box-shadow: 0 0 0 10px rgba(147, 51, 234, 0); }
+        }
+        .ai-glow {
+            animation: pulseGlow 2.2s infinite;
+        }
+        html { scroll-behavior: smooth; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-800 antialiased min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
+    
+    <!-- Main Application Container -->
+    <div id="root" class="flex-1 flex flex-col min-h-screen"></div>
+
+    <!-- React Logic Script -->
+    <script type="text/babel" data-type="module">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // Firebase CDN Imports
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, onSnapshot, setDoc, doc, addDoc, updateDoc, deleteDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        // --- FIREBASE INITIALIZATION ---
+        let app, auth, db, appId;
+        try {
+          const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+          if (firebaseConfig) {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            appId = typeof __app_id !== 'undefined' ? __app_id : 'lms-informatika-9';
+          }
+        } catch (err) {
+          console.warn("Cloud DB not configured. Running in offline/local storage mode.");
+        }
+
+        const callGeminiAPI = async (prompt, asJson = false) => {
+            const apiKey = ""; // Runtime canvas key injection
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+            };
+            
+            if (asJson) {
+                payload.generationConfig = {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            score: { type: "INTEGER", description: "Nilai gabungan esai skala 0 sampai 100" },
+                            feedback: { type: "STRING", description: "Umpan balik atau evaluasi objektif guru maksimal 3-4 kalimat" }
+                        },
+                        required: ["score", "feedback"]
+                    }
+                };
+            }
+
+            let delay = 1000;
+            for (let i = 0; i < 4; i++) {
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                    const data = await res.json();
+                    return data.candidates[0].content.parts[0].text;
+                } catch (err) {
+                    if (i === 3) throw err;
+                    await new Promise(r => setTimeout(r, delay));
+                    delay *= 2;
+                }
+            }
+        };
+
+        const sendToGoogleSheet = async (data, webAppUrl) => {
+            if (!webAppUrl || !webAppUrl.trim()) return false;
+            try {
+                await fetch(webAppUrl.trim(), {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                return true;
+            } catch (err) {
+                console.error("Gagal sinkronisasi ke Google Sheet:", err);
+                return false;
+            }
+        };
+
+        const DEFAULT_STUDENTS = [
+          { nis: '21141', nama: 'AFAN AL RIZKI', kelas: '9A', jk: 'L' },
+          { nis: '21201', nama: 'AJI SYAHPUTRA', kelas: '9A', jk: 'L' },
+          { nis: '21231', nama: 'AMIRA NUR RAFIFAH', kelas: '9A', jk: 'P' },
+          { nis: '21245', nama: 'BAYU PRASETYO', kelas: '9B', jk: 'L' },
+          { nis: '21288', nama: 'CITRA DEWI', kelas: '9B', jk: 'P' },
+          { nis: '21302', nama: 'DANIEL PERDANA', kelas: '9B', jk: 'L' },
+          { nis: '21350', nama: 'EKA PUTRI', kelas: '9C', jk: 'P' },
+          { nis: '21389', nama: 'FAHRUL ROZI', kelas: '9C', jk: 'L' }
+        ];
+
+        const COURSE_DATA = {
+          bk: {
+            id: 'bk',
+            title: 'Berpikir Komputasional (BK)',
+            badge: 'Modul 1',
+            icon: 'fa-brain',
+            color: 'from-purple-600 to-indigo-600',
+            bgColor: 'bg-purple-50 text-purple-700 border-purple-200',
+            videoId: 'P9TKC_mkdzo',
+            materi: `Berpikir komputasional (Computational Thinking) adalah metode menyelesaikan persoalan secara sistematis dengan menerapkan teknik ilmu komputer (informatika). Terdapat 4 pilar utama berpikir komputasional:
+
+1. Dekomposisi (Decomposition): Memecah masalah besar/kompleks menjadi bagian-bagian kecil yang lebih mudah dikelola dan diselesaikan.
+2. Pengenalan Pola (Pattern Recognition): Mencari pola, kemiripan, atau kesamaan bentuk dalam sebuah masalah dengan pengalaman terdahulu.
+3. Abstraksi (Abstraction): Menyaring dan mengabaikan bagian yang tidak penting dari suatu permasalahan, serta berfokus penuh pada informasi inti yang relevan.
+4. Algoritma (Algorithm): Menyusun langkah-langkah logis dan terurut secara sistematis untuk menyelesaikan masalah atau mencapai tujuan.
+
+Struktur Data Penting di Kelas 9:
+- Stack (Tumpukan): Berprinsip LIFO (Last In First Out), elemen terakhir masuk adalah yang pertama keluar (Contoh: tumpukan piring, tombol Undo).
+- Queue (Antrean): Berprinsip FIFO (First In First Out), elemen pertama masuk adalah yang pertama keluar (Contoh: antrean kasir, cetakan dokumen printer).
+- Tree (Pohon): Struktur hierarkis yang memiliki Akar (Root), Cabang (Branch), dan Daun (Leaf) (Contoh: Struktur Organisasi, Folder File OS).
+- Graph (Graf): Jaringan hubungan antarnode/simpul yang terhubung oleh garis edge (Contoh: Jaringan peta rute Google Maps, hubungan teman di media sosial).`,
+            quiz: [
+              { q: "Sebuah tim pengembang merancang sistem pendaftaran siswa baru. Mereka mengabaikan data hobi dan ukuran baju, serta fokus menyimpan NIK, Nama, dan Nilai Rapor. Pilar Berpikir Komputasional yang mendasari keputusan ini adalah...", options: ["A. Dekomposisi", "B. Pengenalan Pola", "C. Abstraksi", "D. Algoritma"], answer: 2 },
+              { q: "Seorang guru menumpuk naskah ujian di meja. Saat mengoreksi, guru selalu mengambil naskah yang berada di urutan paling atas. Karakteristik ini menerapkan konsep struktur data...", options: ["A. Queue (Antrean)", "B. Stack (Tumpukan)", "C. Tree (Pohon)", "D. Graph (Graf)"], answer: 1 },
+              { q: "OSIS membuat struktur kepengurusan yang menunjukkan hubungan Ketua -> Koordinator -> Anggota Divisi. Setiap anggota berada di bawah satu koordinator. Struktur data paling tepat adalah...", options: ["A. Tree", "B. Graph", "C. Stack", "D. Queue"], answer: 0 },
+              { q: "Dalam menentukan rute perjalanan terpendek antar kota yang saling terhubung oleh banyak jalur alternatif, struktur data yang paling efisien digunakan adalah...", options: ["A. Tree", "B. Array", "C. Stack", "D. Graph"], answer: 3 }
+            ],
+            essay: [
+              { q: "Berikan satu contoh penerapan Berpikir Komputasional di kehidupan sehari-hari (selain memasak/membuat makanan), lalu jelaskan penerapan pilar Dekomposisi dan Algoritma pada kasus tersebut!" },
+              { q: "Jelaskan perbedaan mendasar antara struktur data Tree (Pohon) dan Graph (Graf) beserta contoh penggunaannya masing-masing dalam aplikasi dunia nyata!" }
+            ]
+          },
+          tik: {
+            id: 'tik',
+            title: 'Teknologi Informasi dan Komunikasi (TIK)',
+            badge: 'Modul 2',
+            icon: 'fa-laptop-code',
+            color: 'from-blue-600 to-cyan-600',
+            bgColor: 'bg-blue-50 text-blue-700 border-blue-200',
+            videoId: 'RymnCmreBuY',
+            materi: `Teknologi Informasi dan Komunikasi (TIK) berfokus pada pengolahan, pengelolaan, integrasi, dan penyampaian data/informasi secara efektif.
+
+1. Integrasi Konten Aplikasi Perkantoran:
+- Copy & Paste Link: Mengintegrasikan data antar aplikasi (seperti Excel ke Word) sehingga perubahan data di tabel sumber (Excel) akan secara otomatis memperbarui tampilan di aplikasi tujuan (Word).
+- OLE (Object Linking and Embedding): Teknologi yang memungkinkan dokumen memasukkan objek dinamis dari aplikasi lain (seperti bagan/grafik Excel ke slide PowerPoint).
+
+2. Fitur Lanjutan Otomatisasi:
+- Mail Merge (Surat Massal): Fitur di Word untuk membuat surat, sertifikat, atau label massal secara cepat dengan menggabungkan dokumen utama dan sumber data (database Excel).
+
+3. Berbagi Konten Digital:
+- Blog: Media publikasi tulisan digital, jurnal, atau portofolio interaktif.
+- Vlog (Video Blog): Konten edukasi atau informasi berbentuk video. Proses pembuatan vlog meliputi tiga tahapan utama:
+  a. Pra-Produksi: Perencanaan, penulisan naskah (scripting), dan pembuatan rancangan adegan (storyboard).
+  b. Produksi: Proses pengambilan gambar/suara (shooting) di lapangan.
+  c. Pasca-Produksi: Proses penyuntingan video (editing), penambahan teks/audio, dan pengunggahan (uploading).`,
+            quiz: [
+              { q: "Saat menyusun proposal, panitia menarik tabel dari Excel ke Word agar ketika data keuangan di Excel diubah, data di Word otomatis diperbarui. Fitur integrasi yang tepat adalah...", options: ["A. Copy & Paste Biasa", "B. Paste Special - Paste Link", "C. Insert Picture", "D. Export PDF"], answer: 1 },
+              { q: "Untuk mempresentasikan laporan dinamis dari Excel dalam slide PowerPoint secara interaktif, teknologi yang digunakan adalah...", options: ["A. OLE (Object Linking and Embedding)", "B. Mail Merge", "C. Hyperlink", "D. Bookmark"], answer: 0 },
+              { q: "OSIS ingin mempublikasikan warta kegiatan sekolah yang memuat teks artikel, galeri foto, dan kolom komentar pembaca. Media digital yang tepat adalah...", options: ["A. Vlog", "B. Microsoft Word", "C. Blog", "D. Spreadsheet"], answer: 2 },
+              { q: "Tahapan Pra-Produksi dalam pembuatan konten Vlog Edukasi meliputi kegiatan...", options: ["A. Color grading dan rendering", "B. Pengambilan gambar di studio", "C. Menyusun naskah dan storyboard", "D. Mengunggah video ke internet"], answer: 2 }
+            ],
+            essay: [
+              { q: "Jelaskan alur integrasi data laporan keuangan dari Microsoft Excel, penyusunan naskah di Word, hingga pembuatan presentasi di PowerPoint dengan memanfaatkan fitur Paste Link / OLE!" },
+              { q: "Tuliskan Standar Operasional Prosedur (SOP) secara runtut mulai dari tahap Pra-Produksi, Produksi, hingga Pasca-Produksi saat tim siswa membuat Vlog Edukasi Sekolah!" }
+            ]
+          },
+          sk: {
+            id: 'sk',
+            title: 'Sistem Komputer (SK)',
+            badge: 'Modul 3',
+            icon: 'fa-microchip',
+            color: 'from-emerald-600 to-teal-600',
+            bgColor: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+            videoId: '7Y8G40pThl8',
+            materi: `Sistem Komputer membahas bagaimana perangkat keras (Hardware), perangkat lunak (Software), dan manusia (Brainware) berinteraksi secara harmonis.
+
+1. Arsitektur Komputer & CPU:
+- ALU (Arithmetic Logic Unit): Melakukan perhitungan aritmatika (+, -, *, /) dan logika (AND, OR, NOT).
+- CU (Control Unit): Mengatur lalu lintas data dan instruksi dalam seluruh sistem komputer.
+- Register: Memori kecepatan tinggi di dalam CPU untuk menyimpan instruksi yang sedang diproses.
+
+2. Sistem Bilangan Digital:
+- Biner (Basis 2): Menggunakan angka 0 dan 1.
+- Oktal (Basis 8): Menggunakan angka 0 sampai 7.
+- Desimal (Basis 10): Menggunakan angka 0 sampai 9.
+- Heksadesimal (Basis 16): Menggunakan angka 0-9 dan huruf A-F (A=10, B=11, C=12, D=13, E=14, F=15).
+
+3. Mekanisme Kerja Sinyal Digital:
+Sinyal logika tinggi (1) mewakili tegangan listrik AKTIF, sedangkan sinyal logika rendah (0) mewakili NON-AKTIF. Pintu logika dasar (AND, OR, NOT) memproses kombinasi sinyal ini untuk menghasilkan keputusan logis dalam sirkuit komputer.`,
+            quiz: [
+              { q: "Komponen CPU yang bertugas melakukan operasi perhitungan matematika dan pembandingan logika adalah...", options: ["A. Control Unit (CU)", "B. Arithmetic Logic Unit (ALU)", "C. Register", "D. RAM"], answer: 1 },
+              { q: "Konversi bilangan biner 1011 ke dalam sistem bilangan desimal menghasilkan nilai...", options: ["A. 11", "B. 13", "C. 15", "D. 9"], answer: 0 },
+              { q: "Sistem bilangan yang sering digunakan dalam penulisan kode warna RGB web (contoh #FF5733) adalah...", options: ["A. Biner", "B. Oktal", "C. Desimal", "D. Heksadesimal"], answer: 3 },
+              { q: "Gerbang logika yang akan menghasilkan output '1' (TRUE) HANYA JIKA seluruh input bernilai '1' adalah...", options: ["A. OR", "B. NOT", "C. AND", "D. XOR"], answer: 2 }
+            ],
+            essay: [
+              { q: "Jelaskan siklus instruksi Fetch-Decode-Execute pada CPU saat komputer mengeksekusi sebuah program!" },
+              { q: "Ubah angka desimal 45 menjadi bilangan Biner dan Heksadesimal beserta langkah perhitungan lengkapnya!" }
+            ]
+          }
+        };
+
+        function App() {
+          const [authUser, setAuthUser] = useState(null);
+          const [currentUser, setCurrentUser] = useState(null); 
+          const [currentView, setCurrentView] = useState('login'); // 'login', 'dashboard', 'module'
+          
+          // Login Form States
+          const [username, setUsername] = useState('');
+          const [password, setPassword] = useState('');
+          const [loginError, setLoginError] = useState('');
+
+          // Learning Module States
+          const [activeModule, setActiveModule] = useState(null);
+          const [learningStep, setLearningStep] = useState(1); // 1: Material & AI, 2: Quiz PG, 3: Essay
+          const [quizAnswers, setQuizAnswers] = useState({});
+          const [essayAnswers, setEssayAnswers] = useState({});
+          const [quizScore, setQuizScore] = useState(null);
+          const [isSubmitting, setIsSubmitting] = useState(false); 
+
+          // Gemini AI Assistant States
+          const [aiQuery, setAiQuery] = useState('');
+          const [aiResponse, setAiResponse] = useState('');
+          const [isAiLoading, setIsAiLoading] = useState(false);
+
+          // Admin / Teacher States
+          const [studentsList, setStudentsList] = useState(DEFAULT_STUDENTS);
+          const [resultsData, setResultsData] = useState([]);
+          const [selectedEssayData, setSelectedEssayData] = useState(null);
+          const [essayScoreInput, setEssayScoreInput] = useState(''); 
+          const [essayFeedbackInput, setEssayFeedbackInput] = useState(''); 
+          const [isAiGrading, setIsAiGrading] = useState(false); 
+          const [gscriptUrl, setGscriptUrl] = useState(() => localStorage.getItem('lms_gscript_url') || '');
+
+          // Admin Dashboard UI Filter & Tabs
+          const [adminTab, setAdminTab] = useState('infografis'); // 'infografis', 'rekap', 'koreksi', 'belum_mengerjakan', 'siswa', 'gsheet'
+          const [searchTerm, setSearchTerm] = useState('');
+          const [classFilter, setClassFilter] = useState('semua');
+          const [pendingModuleFilter, setPendingModuleFilter] = useState('semua');
+          const [selectedResultIds, setSelectedResultIds] = useState([]);
+
+          // Student Form Admin State
+          const [newNis, setNewNis] = useState('');
+          const [newNama, setNewNama] = useState('');
+          const [newKelas, setNewKelas] = useState('9A');
+          const [newJk, setNewJk] = useState('L');
+
+          // Custom UI Alerts & Confirmation Modals
+          const [notification, setNotification] = useState({ show: false, type: '', message: '' });
+          const [confirmDialog, setConfirmDialog] = useState({ show: false, message: '', onConfirm: null });
+
+          useEffect(() => {
+            if (!auth) return;
+            const initAuth = async () => {
+              try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                  await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                  await signInAnonymously(auth);
+                }
+              } catch (err) {
+                console.warn("Auth streaming fallback to anonymous/local session.", err);
+              }
+            };
+            initAuth();
+            
+            const unsubscribe = onAuthStateChanged(auth, setAuthUser);
+            return () => unsubscribe();
+          }, []);
+
+          useEffect(() => {
+            if (!db || !authUser) {
+              const localRes = localStorage.getItem('lms_results');
+              if (localRes) {
+                try { setResultsData(JSON.parse(localRes)); } catch(e){}
+              }
+              const localStud = localStorage.getItem('lms_students');
+              if (localStud) {
+                try { setStudentsList(JSON.parse(localStud)); } catch(e){}
+              }
+              return;
+            }
+
+            // Sync Students Collection
+            const unsubscribeStudents = onSnapshot(
+              doc(db, 'artifacts', appId, 'public', 'data', 'lms_data', 'students'),
+              (docSnap) => {
+                if (docSnap.exists() && docSnap.data().list) {
+                  try {
+                    setStudentsList(JSON.parse(docSnap.data().list));
+                  } catch (e) {
+                    console.error("Error parsing student data", e);
+                  }
+                }
+              },
+              (error) => console.error("Snapshot error students:", error)
+            );
+
+            // Sync Results Collection
+            const unsubscribeResults = onSnapshot(
+              collection(db, 'artifacts', appId, 'public', 'data', 'lms_results'),
+              (snapshot) => {
+                const results = [];
+                snapshot.forEach(docSnap => {
+                  results.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                const sorted = results.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                setResultsData(sorted);
+              },
+              (error) => console.error("Snapshot error results:", error)
+            );
+
+            // Sync Config
+            const unsubscribeGscript = onSnapshot(
+              doc(db, 'artifacts', appId, 'public', 'data', 'lms_data', 'config'),
+              (docSnap) => {
+                if (docSnap.exists() && docSnap.data().gscriptUrl) {
+                  setGscriptUrl(docSnap.data().gscriptUrl);
+                  localStorage.setItem('lms_gscript_url', docSnap.data().gscriptUrl);
+                }
+              },
+              (error) => console.error("Snapshot error config:", error)
+            );
+
+            return () => {
+              unsubscribeStudents();
+              unsubscribeResults();
+              unsubscribeGscript();
+            };
+          }, [authUser]);
+
+          const showNotice = (type, message) => {
+            setNotification({ show: true, type, message });
+            setTimeout(() => setNotification({ show: false, type: '', message: '' }), 4200);
+          };
+
+          const handleSaveGscriptUrl = async (urlToSave) => {
+             setGscriptUrl(urlToSave);
+             localStorage.setItem('lms_gscript_url', urlToSave);
+             if (db && authUser) {
+               try {
+                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lms_data', 'config'), {
+                    gscriptUrl: urlToSave
+                 }, { merge: true });
+               } catch (e) { console.error(e); }
+             }
+             showNotice('success', 'URL WebApp Google Sheets berhasil disimpan!');
+          };
+
+          const handleLogin = (e) => {
+            e.preventDefault();
+            setLoginError('');
+
+            const cleanUser = username.trim();
+            const cleanPass = password.trim();
+
+            if (cleanUser === 'admin' && cleanPass === 'admin9') {
+              setCurrentUser({ role: 'admin', nama: 'Guru Administrator' });
+              setCurrentView('dashboard');
+              showNotice('success', 'Selamat datang kembali, Bapak/Ibu Guru!');
+              return;
+            }
+
+            if (cleanUser.length >= 4 && cleanUser === cleanPass) {
+              const student = studentsList.find(s => s.nis === cleanUser) || {
+                nis: cleanUser,
+                nama: `Siswa ${cleanUser}`,
+                kelas: '9A', 
+                jk: 'L'
+              };
+              
+              setCurrentUser({ role: 'student', ...student });
+              setCurrentView('dashboard');
+              showNotice('success', `Berhasil masuk sebagai ${student.nama}`);
+            } else {
+              setLoginError('Login gagal! Pastikan Username/NIS sama dengan Password.');
+            }
+          };
+
+          const handleLogout = () => {
+            setCurrentUser(null);
+            setCurrentView('login');
+            setUsername('');
+            setPassword('');
+            setActiveModule(null);
+            setAiResponse('');
+            setAiQuery('');
+          };
+
+          const openModule = (moduleId) => {
+            setActiveModule(moduleId);
+            setLearningStep(1);
+            setQuizAnswers({});
+            setEssayAnswers({});
+            setQuizScore(null);
+            setIsSubmitting(false);
+            setAiResponse('');
+            setAiQuery('');
+            setCurrentView('module');
+          };
+
+          const handleAskAITutor = async (customPromptText) => {
+            const queryToUse = customPromptText || aiQuery;
+            if (!queryToUse || !queryToUse.trim()) return;
+            setIsAiLoading(true);
+            const course = COURSE_DATA[activeModule];
+            const prompt = `Kamu adalah 'Guru AI Informatika Kelas 9 SMP' yang ramah, komunikatif, menyenangkan, dan pandai memberikan analogi sederhana.
+Tugas: Jawab pertanyaan siswa kelas 9 tentang materi "${course.title}".
+Rangkuman Materi: "${course.materi}"
+Pertanyaan Siswa: "${queryToUse}"
+
+Instruksi Tambahan:
+- Gunakan bahasa yang santun, memotivasi, dan mudah dicerna anak remaja usia 14-15 tahun.
+- Berikan poin-poin singkat atau contoh sederhana dalam kehidupan sehari-hari jika membantu.
+- Gunakan beberapa emoji yang sesuai agar lebih bersahabat.
+- JANGAN langsung memberikan kunci jawaban spesifik jika siswa menanyakan soal kuis/ujian, melainkan jelaskan konsep dasarnya.`;
+            
+            try {
+                const response = await callGeminiAPI(prompt);
+                setAiResponse(response);
+            } catch (err) {
+                setAiResponse("Mohon maaf, koneksi Asisten AI sedang mengalami kendala. Silakan ulangi pertanyaanmu ya! 😊");
+            }
+            setIsAiLoading(false);
+          };
+
+          const handleAiGrader = async () => {
+             if (!selectedEssayData || !selectedEssayData.essayData || selectedEssayData.essayData.length === 0) return;
+             setIsAiGrading(true);
+             
+             let promptData = "";
+             selectedEssayData.essayData.forEach((item, index) => {
+                 promptData += `\n[Soal ${index+1}]: ${item.question}\n[Jawaban Siswa]: ${item.answer}\n`;
+             });
+
+             const prompt = `Kamu adalah seorang Guru Informatika SMP senior yang sangat teliti, adil, dan objektif dalam mengoreksi ujian esai siswa kelas 9.
+Materi: "${selectedEssayData.module}".
+Data Lembar Jawab Siswa:
+${promptData}
+
+Tugas Evaluasi:
+1. Analisis ketepatan pemahaman konsep siswa berdasarkan standar Kurikulum Merdeka Informatika SMP.
+2. Berikan Total Nilai Esai Gabungan angka bulat (skala 0 sampai 100). Misal jika ada 2 soal dan keduanya sempurna berikan 100. Jika separuh tepat berikan 50.
+3. Berikan saran/umpan balik konstruktif untuk siswa (maksimal 3 kalimat) yang berisi apresiasi atas usaha mereka serta pembenaran jika ada kesalahan konsep.
+Output WAJIB berupa JSON murni sesuai format schema.`;
+
+             try {
+                const responseJSONString = await callGeminiAPI(prompt, true);
+                const responseData = JSON.parse(responseJSONString);
+                if (responseData.score !== undefined) {
+                   setEssayScoreInput(responseData.score.toString());
+                }
+                if (responseData.feedback) {
+                   setEssayFeedbackInput(responseData.feedback);
+                }
+                showNotice('success', 'AI Grader berhasil menganalisis lembar jawaban!');
+             } catch (err) {
+                showNotice('error', 'Gagal memanggil AI Auto Grader. Coba lagi nanti.');
+                console.error(err);
+             }
+             setIsAiGrading(false);
+          };
+
+          const submitQuiz = async () => {
+            setIsSubmitting(true);
+            const course = COURSE_DATA[activeModule];
+            
+            let correct = 0;
+            course.quiz.forEach((q, idx) => {
+              if (quizAnswers[idx] === q.answer) correct++;
+            });
+            const finalScorePG = Math.round((correct / course.quiz.length) * 100);
+            
+            const formattedEssay = course.essay.map((item, idx) => ({
+              question: item.q,
+              answer: essayAnswers[idx] || "Tidak dijawab"
+            }));
+
+            const newResult = {
+              nis: currentUser.nis,
+              nama: currentUser.nama,
+              kelas: currentUser.kelas,
+              module: course.title,
+              scorePG: finalScorePG,
+              essayData: formattedEssay, 
+              scoreEsai: null, // Belum dikoreksi
+              feedbackEsai: '',
+              date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+              timestamp: Date.now()
+            };
+
+            // Kirim Otomatis ke Google Spreadsheet jika WebApp URL terpasang
+            if (gscriptUrl) {
+                sendToGoogleSheet(newResult, gscriptUrl);
+            }
+
+            // Save to Firestore Cloud
+            if (db && authUser) {
+              try {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'lms_results'), newResult);
+                setQuizScore(finalScorePG); 
+                showNotice('success', 'Jawaban berhasil dikirim ke guru & disinkronkan!');
+              } catch (err) {
+                console.error("Gagal menyimpan ke cloud:", err);
+                showNotice('error', 'Koneksi cloud bermasalah. Menyimpan di memori lokal.');
+                saveLocalResult(newResult);
+              }
+            } else {
+              saveLocalResult(newResult);
+            }
+            
+            setIsSubmitting(false);
+          };
+
+          const saveLocalResult = (resObj) => {
+            const itemWithId = { id: 'local_' + Date.now(), ...resObj };
+            const updatedResults = [itemWithId, ...resultsData];
+            setResultsData(updatedResults);
+            localStorage.setItem('lms_results', JSON.stringify(updatedResults));
+            setQuizScore(resObj.scorePG);
+            showNotice('success', 'Tersimpan lokal (Mode Offline)!');
+          };
+
+          const handleSaveEssayScore = async () => {
+             if (!selectedEssayData) return;
+             const scoreNum = parseInt(essayScoreInput);
+             if (isNaN(scoreNum) || scoreNum < 0 || scoreNum > 100) {
+                showNotice('error', 'Nilai harus angka antara 0 - 100!');
+                return;
+             }
+
+             const updatedItem = {
+                ...selectedEssayData,
+                scoreEsai: scoreNum,
+                feedbackEsai: essayFeedbackInput.trim()
+             };
+
+             // Sync Cloud
+             if (db && authUser && !selectedEssayData.id.startsWith('local_')) {
+                try {
+                   await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lms_results', selectedEssayData.id), {
+                      scoreEsai: scoreNum,
+                      feedbackEsai: essayFeedbackInput.trim()
+                   });
+                   showNotice('success', 'Nilai esai & catatan umpan balik disimpan!');
+                } catch (e) {
+                   console.error("Update error:", e);
+                }
+             } else {
+                const updatedList = resultsData.map(r => r.id === selectedEssayData.id ? updatedItem : r);
+                setResultsData(updatedList);
+                localStorage.setItem('lms_results', JSON.stringify(updatedList));
+                showNotice('success', 'Nilai esai berhasil disimpan secara lokal!');
+             }
+             
+             setSelectedEssayData(null);
+          };
+
+          const handleDeleteResult = (id) => {
+             setConfirmDialog({
+                show: true,
+                message: 'Apakah Anda yakin ingin menghapus data nilai siswa ini?',
+                onConfirm: async () => {
+                   if (db && authUser && !id.startsWith('local_')) {
+                      try {
+                         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lms_results', id));
+                         showNotice('success', 'Data nilai berhasil dihapus dari cloud.');
+                      } catch (e) { console.error(e); }
+                   } else {
+                      const filtered = resultsData.filter(r => r.id !== id);
+                      setResultsData(filtered);
+                      localStorage.setItem('lms_results', JSON.stringify(filtered));
+                      showNotice('success', 'Data nilai dihapus.');
+                   }
+                   setConfirmDialog({ show: false, message: '', onConfirm: null });
+                }
+             });
+          };
+
+          const handleAddStudent = async (e) => {
+             e.preventDefault();
+             if (!newNis.trim() || !newNama.trim()) {
+                showNotice('error', 'NIS dan Nama Siswa wajib diisi!');
+                return;
+             }
+
+             if (studentsList.some(s => s.nis === newNis.trim())) {
+                showNotice('error', 'NIS sudah terdaftar dalam sistem!');
+                return;
+             }
+
+             const updated = [...studentsList, {
+                nis: newNis.trim(),
+                nama: newNama.trim().toUpperCase(),
+                kelas: newKelas,
+                jk: newJk
+             }];
+
+             setStudentsList(updated);
+             setNewNis('');
+             setNewNama('');
+
+             if (db && authUser) {
+                try {
+                   await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lms_data', 'students'), {
+                      list: JSON.stringify(updated)
+                   });
+                } catch (e) { console.error(e); }
+             } else {
+                localStorage.setItem('lms_students', JSON.stringify(updated));
+             }
+             showNotice('success', 'Siswa baru berhasil ditambahkan!');
+          };
+
+          const handleDeleteStudent = (nis) => {
+             setConfirmDialog({
+                show: true,
+                message: `Hapus siswa NIS ${nis} dari daftar kelas?`,
+                onConfirm: async () => {
+                   const updated = studentsList.filter(s => s.nis !== nis);
+                   setStudentsList(updated);
+                   if (db && authUser) {
+                      try {
+                         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lms_data', 'students'), {
+                            list: JSON.stringify(updated)
+                         });
+                      } catch (e) { console.error(e); }
+                   } else {
+                      localStorage.setItem('lms_students', JSON.stringify(updated));
+                   }
+                   showNotice('success', 'Siswa berhasil dihapus!');
+                   setConfirmDialog({ show: false, message: '', onConfirm: null });
+                }
+             });
+          };
+
+          const filteredResults = useMemo(() => {
+             return resultsData.filter(item => {
+                const matchSearch = item.nama.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                    item.nis.includes(searchTerm);
+                const matchClass = classFilter === 'semua' || item.kelas === classFilter;
+                return matchSearch && matchClass;
+             });
+          }, [resultsData, searchTerm, classFilter]);
+
+          const pendingCorrectionList = useMemo(() => {
+             return resultsData.filter(item => item.scoreEsai === null || item.scoreEsai === undefined);
+          }, [resultsData]);
+
+          const studentsNotSubmitted = useMemo(() => {
+             if (pendingModuleFilter === 'semua') return [];
+             const courseTitle = COURSE_DATA[pendingModuleFilter]?.title;
+             const submittedNis = new Set(
+                resultsData.filter(r => r.module === courseTitle).map(r => r.nis)
+             );
+             return studentsList.filter(s => {
+                const matchClass = classFilter === 'semua' || s.kelas === classFilter;
+                return matchClass && !submittedNis.has(s.nis);
+             });
+          }, [resultsData, studentsList, pendingModuleFilter, classFilter]);
+
+          const exportToCSV = () => {
+             if (filteredResults.length === 0) {
+                showNotice('error', 'Tidak ada data untuk diexport!');
+                return;
+             }
+             let csvContent = "data:text/csv;charset=utf-8,";
+             csvContent += "NIS,Nama Siswa,Kelas,Modul,Nilai PG,Nilai Esai,Nilai Akhir,Tanggal\n";
+
+             filteredResults.forEach(r => {
+                const scoreEsaiVal = r.scoreEsai !== null && r.scoreEsai !== undefined ? r.scoreEsai : "-";
+                const finalScore = r.scoreEsai !== null && r.scoreEsai !== undefined 
+                   ? Math.round((r.scorePG * 0.4) + (r.scoreEsai * 0.6)) 
+                   : r.scorePG;
+                csvContent += `"${r.nis}","${r.nama}","${r.kelas}","${r.module}",${r.scorePG},"${scoreEsaiVal}",${finalScore},"${r.date}"\n`;
+             });
+
+             const encodedUri = encodeURI(csvContent);
+             const link = document.createElement("a");
+             link.setAttribute("href", encodedUri);
+             link.setAttribute("download", `Rekap_Nilai_Informatika_Kelas9_${new Date().toISOString().slice(0,10)}.csv`);
+             document.body.appendChild(link);
+             link.click();
+             document.body.removeChild(link);
+             showNotice('success', 'File CSV Rekap Nilai berhasil diunduh!');
+          };
+
+          return (
+            <div className="flex-1 flex flex-col bg-slate-50">
+              {/* TOAST NOTIFICATION */}
+              {notification.show && (
+                <div className={`fixed top-5 right-5 z-50 flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl text-white transition-all transform animate-fade-in ${
+                  notification.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
+                }`}>
+                  <i className={`fas ${notification.type === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle'} text-xl`}></i>
+                  <span className="font-medium text-sm">{notification.message}</span>
+                </div>
+              )}
+
+              {/* CONFIRMATION DIALOG MODAL */}
+              {confirmDialog.show && (
+                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+                  <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+                     <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mb-4 text-xl">
+                        <i className="fas fa-trash-alt"></i>
+                     </div>
+                     <h3 className="text-lg font-bold text-slate-800 mb-2">Konfirmasi Tindakan</h3>
+                     <p className="text-slate-600 text-sm mb-6">{confirmDialog.message}</p>
+                     <div className="flex justify-end gap-3">
+                        <button 
+                           onClick={() => setConfirmDialog({ show: false, message: '', onConfirm: null })}
+                           className="px-4 py-2 rounded-xl text-slate-600 bg-slate-100 hover:bg-slate-200 font-medium text-sm transition">
+                           Batal
+                        </button>
+                        <button 
+                           onClick={confirmDialog.onConfirm}
+                           className="px-4 py-2 rounded-xl text-white bg-rose-600 hover:bg-rose-700 font-medium text-sm shadow-md transition">
+                           Ya, Lanjutkan
+                        </button>
+                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* NAVIGATION BAR */}
+              <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                  <div className="flex items-center gap-3 cursor-pointer" onClick={() => currentUser && setCurrentView('dashboard')}>
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-white font-black text-xl shadow-md">
+                      <i className="fas fa-cubes"></i>
+                    </div>
+                    <div>
+                      <h1 className="text-lg font-bold text-slate-900 tracking-tight leading-none">Informatika 9</h1>
+                      <span className="text-xs text-indigo-600 font-semibold uppercase tracking-wider">Kurikulum Merdeka</span>
+                    </div>
+                  </div>
+
+                  {currentUser && (
+                    <div className="flex items-center gap-4">
+                      <div className="hidden md:flex items-center gap-3 bg-slate-100 px-3.5 py-1.5 rounded-full border border-slate-200">
+                        <div className="w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">
+                          {currentUser.role === 'admin' ? 'G' : currentUser.nama.charAt(0)}
+                        </div>
+                        <div className="text-left">
+                          <p className="text-xs font-bold text-slate-800 leading-tight">{currentUser.nama}</p>
+                          <p className="text-[10px] text-slate-500">{currentUser.role === 'admin' ? 'Administrator / Guru' : `NIS: ${currentUser.nis} • Kelas ${currentUser.kelas}`}</p>
+                        </div>
+                      </div>
+
+                      <button 
+                        onClick={handleLogout}
+                        className="flex items-center gap-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-2 rounded-xl text-xs font-semibold transition"
+                        title="Keluar dari akun">
+                        <i className="fas fa-sign-out-alt"></i>
+                        <span className="hidden sm:inline">Keluar</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </header>
+
+              {}
+              <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                
+                {/* 1. LOGIN VIEW */}
+                {currentView === 'login' && (
+                  <div className="max-w-md mx-auto my-8 animate-fade-in">
+                    <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
+                      <div className="bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-800 p-8 text-white text-center relative">
+                        <div className="w-16 h-16 mx-auto bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center text-3xl mb-4 border border-white/20">
+                          <i className="fas fa-graduation-cap"></i>
+                        </div>
+                        <h2 className="text-2xl font-extrabold tracking-tight">LMS Informatika Kelas 9</h2>
+                        <p className="text-indigo-200 text-xs mt-1">Platform Pembelajaran Digital Interaktif</p>
+                      </div>
+
+                      <form onSubmit={handleLogin} className="p-8 space-y-5">
+                        {loginError && (
+                          <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-start gap-2.5">
+                            <i className="fas fa-exclamation-circle text-rose-500 mt-0.5"></i>
+                            <span>{loginError}</span>
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Username / NIS</label>
+                          <div className="relative">
+                            <i className="fas fa-user absolute left-4 top-3.5 text-slate-400 text-sm"></i>
+                            <input 
+                              type="text" 
+                              required
+                              value={username}
+                              onChange={(e) => setUsername(e.target.value)}
+                              placeholder="Masukkan NIS (cth: 21141) atau admin"
+                              className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Password</label>
+                          <div className="relative">
+                            <i className="fas fa-key absolute left-4 top-3.5 text-slate-400 text-sm"></i>
+                            <input 
+                              type="password" 
+                              required
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="Sama dengan Username/NIS"
+                              className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                            />
+                          </div>
+                          <p className="text-[11px] text-slate-400 mt-1">Catatan: Siswa login menggunakan NIS sebagai Username & Password.</p>
+                        </div>
+
+                        <button 
+                          type="submit"
+                          className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-500/25 transition transform active:scale-95 text-sm">
+                          Masuk ke Platform <i className="fas fa-arrow-right ml-2"></i>
+                        </button>
+
+                        <div className="pt-4 border-t border-slate-100 text-center space-y-2">
+                           <p className="text-xs text-slate-500 font-medium">Uji Coba Cepat (Preset Login):</p>
+                           <div className="flex justify-center gap-2">
+                             <button 
+                               type="button" 
+                               onClick={() => { setUsername('21141'); setPassword('21141'); }}
+                               className="px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-xs font-semibold transition">
+                               Siswa (21141)
+                             </button>
+                             <button 
+                               type="button" 
+                               onClick={() => { setUsername('admin'); setPassword('admin9'); }}
+                               className="px-3 py-1.5 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg text-xs font-semibold transition">
+                               Guru Admin (admin)
+                             </button>
+                           </div>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. STUDENT DASHBOARD VIEW */}
+                {currentView === 'dashboard' && currentUser?.role === 'student' && (
+                  <div className="space-y-8 animate-fade-in">
+                    {/* Welcome Banner */}
+                    <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-800 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+                      <div className="relative z-10 max-w-2xl">
+                        <span className="px-3 py-1 rounded-full bg-white/20 text-xs font-semibold tracking-wider uppercase mb-3 inline-block backdrop-blur-md">
+                           Selamat Datang di Portal Belajar
+                        </span>
+                        <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Halo, {currentUser.nama}! 👋</h2>
+                        <p className="text-indigo-100 text-sm mt-2 leading-relaxed">
+                          Siap untuk menguasai konsep Informatika hari ini? Pilih modul pembelajaran di bawah ini dan tingkatkan pemahamanmu bersama Asisten AI!
+                        </p>
+                      </div>
+                      <i className="fas fa-laptop-code absolute right-6 -bottom-6 text-white/10 text-9xl hidden lg:block"></i>
+                    </div>
+
+                    {/* Module Grid */}
+                    <div>
+                      <div className="flex items-center justify-between mb-6">
+                        <div>
+                          <h3 className="text-xl font-extrabold text-slate-800">Modul Pembelajaran Utama</h3>
+                          <p className="text-xs text-slate-500">Materi resmi Kurikulum Merdeka Informatika Kelas 9</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {Object.values(COURSE_DATA).map(course => {
+                          const userResult = resultsData.find(r => r.nis === currentUser.nis && r.module === course.title);
+                          return (
+                            <div key={course.id} className="bg-white rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-xl transition duration-300 flex flex-col overflow-hidden group">
+                              <div className={`p-6 bg-gradient-to-br ${course.color} text-white relative`}>
+                                <div className="flex justify-between items-start">
+                                  <span className="px-2.5 py-1 rounded-lg bg-black/20 text-[11px] font-bold tracking-wider backdrop-blur-md">
+                                    {course.badge}
+                                  </span>
+                                  <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center text-lg">
+                                    <i className={`fas ${course.icon}`}></i>
+                                  </div>
+                                </div>
+                                <h4 className="text-lg font-bold mt-4 line-clamp-1">{course.title}</h4>
+                              </div>
+
+                              <div className="p-6 flex-1 flex flex-col justify-between space-y-4">
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between text-xs text-slate-500">
+                                    <span>Status Pengerjaan:</span>
+                                    <span className={`font-bold ${userResult ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                      {userResult ? 'Selesai Dikirim' : 'Belum Selesai'}
+                                    </span>
+                                  </div>
+                                  
+                                  {userResult && (
+                                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs space-y-1">
+                                      <div className="flex justify-between">
+                                        <span className="text-slate-500">Nilai PG:</span>
+                                        <span className="font-bold text-slate-800">{userResult.scorePG} / 100</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span className="text-slate-500">Nilai Esai:</span>
+                                        <span className="font-bold text-indigo-600">
+                                          {userResult.scoreEsai !== null ? `${userResult.scoreEsai} / 100` : 'Sedang Dikoreksi Guru'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+
+                                <button 
+                                  onClick={() => openModule(course.id)}
+                                  className="w-full py-3 bg-slate-900 hover:bg-indigo-600 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-md">
+                                  <span>{userResult ? 'Pelajari Lagi / Ulangi' : 'Buka Modul & Kuis'}</span>
+                                  <i className="fas fa-arrow-right"></i>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. INTERACTIVE LEARNING MODULE VIEW */}
+                {currentView === 'module' && activeModule && COURSE_DATA[activeModule] && (
+                  <div className="space-y-6 animate-fade-in">
+                    {/* Module Header */}
+                    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <button 
+                          onClick={() => setCurrentView('dashboard')}
+                          className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition">
+                          <i className="fas fa-arrow-left"></i>
+                        </button>
+                        <div>
+                          <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${COURSE_DATA[activeModule].bgColor} mb-1`}>
+                            {COURSE_DATA[activeModule].badge}
+                          </span>
+                          <h2 className="text-xl font-extrabold text-slate-800">{COURSE_DATA[activeModule].title}</h2>
+                        </div>
+                      </div>
+
+                      {/* Step Indicator Tabs */}
+                      <div className="flex items-center bg-slate-100 p-1.5 rounded-xl text-xs font-bold">
+                        <button 
+                          onClick={() => setLearningStep(1)}
+                          className={`px-3.5 py-2 rounded-lg transition ${learningStep === 1 ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          1. Materi & AI
+                        </button>
+                        <button 
+                          onClick={() => setLearningStep(2)}
+                          className={`px-3.5 py-2 rounded-lg transition ${learningStep === 2 ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          2. Kuis PG
+                        </button>
+                        <button 
+                          onClick={() => setLearningStep(3)}
+                          className={`px-3.5 py-2 rounded-lg transition ${learningStep === 3 ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          3. Soal Esai
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* STEP 1: MATERIAL TEXT & VIDEO + GEMINI AI TUTOR */}
+                    {learningStep === 1 && (
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        {/* Left: Video & Written Material */}
+                        <div className="lg:col-span-7 space-y-6">
+                          {/* Youtube Frame */}
+                          <div className="bg-black rounded-2xl overflow-hidden shadow-lg aspect-video relative">
+                            <iframe 
+                              className="w-full h-full"
+                              src={`https://www.youtube.com/embed/${COURSE_DATA[activeModule].videoId}`}
+                              title="Video Pembelajaran Informatika"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                              allowFullScreen>
+                            </iframe>
+                          </div>
+
+                          {/* Rangkuman Materi */}
+                          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                            <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+                              <i className="fas fa-book-open text-indigo-600"></i>
+                              <span>Rangkuman Materi Modul</span>
+                            </h3>
+                            <div className="prose prose-slate max-w-none text-sm text-slate-600 whitespace-pre-line leading-relaxed">
+                              {COURSE_DATA[activeModule].materi}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Right: Gemini AI Tutor Interactive Box */}
+                        <div className="lg:col-span-5">
+                          <div className="bg-white rounded-2xl border border-purple-200 shadow-xl overflow-hidden flex flex-col h-full min-h-[500px]">
+                            <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-4 text-white flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className="w-9 h-9 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center text-lg ai-glow">
+                                  <i className="fas fa-robot"></i>
+                                </div>
+                                <div>
+                                  <h4 className="font-bold text-sm">Guru AI Informatika</h4>
+                                  <p className="text-[10px] text-purple-200">Powered by Gemini 3 Flash</p>
+                                </div>
+                              </div>
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-[10px] font-bold uppercase">
+                                Online
+                              </span>
+                            </div>
+
+                            {/* Chat Display Window */}
+                            <div className="p-4 flex-1 overflow-y-auto space-y-4 max-h-[380px] bg-slate-50/50">
+                              <div className="bg-purple-100/70 border border-purple-200 text-purple-900 p-3.5 rounded-2xl text-xs leading-relaxed">
+                                Halo! Saya Asisten AI Guru Informatika. Kesulitan memahami materi di samping? Tanyakan apa saja, saya siap membantu memberikan penjelasan dan contoh sederhana! 😊
+                              </div>
+
+                              {aiResponse && (
+                                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-xs leading-relaxed text-slate-800 space-y-2 animate-fade-in">
+                                  <div className="font-bold text-indigo-600 flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                                    <i className="fas fa-sparkles"></i> Jawaban Asisten AI:
+                                  </div>
+                                  <div className="whitespace-pre-line text-slate-700">{aiResponse}</div>
+                                </div>
+                              )}
+
+                              {isAiLoading && (
+                                <div className="flex items-center gap-2 text-xs text-purple-600 font-medium p-3 bg-purple-50 rounded-xl animate-pulse">
+                                  <i className="fas fa-spinner fa-spin"></i>
+                                  <span>Guru AI sedang mengetik jawaban terbaik untukmu...</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Prompt Recommendations & Input Form */}
+                            <div className="p-4 bg-white border-t border-slate-100 space-y-3">
+                              <div className="flex flex-wrap gap-1.5">
+                                <button 
+                                  type="button" 
+                                  onClick={() => { setAiQuery("Berikan contoh dalam kehidupan sehari-hari!"); handleAskAITutor("Berikan contoh dalam kehidupan sehari-hari!"); }}
+                                  className="px-2.5 py-1 bg-slate-100 hover:bg-purple-50 text-slate-600 hover:text-purple-700 rounded-lg text-[11px] font-medium transition">
+                                  💡 Contoh Sehari-hari
+                                </button>
+                                <button 
+                                  type="button" 
+                                  onClick={() => { setAiQuery("Jelaskan dengan analogi yang sangat simpel!"); handleAskAITutor("Jelaskan dengan analogi yang sangat simpel!"); }}
+                                  className="px-2.5 py-1 bg-slate-100 hover:bg-purple-50 text-slate-600 hover:text-purple-700 rounded-lg text-[11px] font-medium transition">
+                                  ⚡ Analogi Simpel
+                                </button>
+                              </div>
+
+                              <div className="flex gap-2">
+                                <input 
+                                  type="text" 
+                                  value={aiQuery}
+                                  onChange={(e) => setAiQuery(e.target.value)}
+                                  onKeyDown={(e) => e.key === 'Enter' && handleAskAITutor()}
+                                  placeholder="Ketik pertanyaanmu di sini..."
+                                  className="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 transition"
+                                />
+                                <button 
+                                  onClick={() => handleAskAITutor()}
+                                  disabled={isAiLoading}
+                                  className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs shadow-md transition disabled:opacity-50">
+                                  <i className="fas fa-paper-plane"></i>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* STEP 2: MULTIPLE CHOICE QUIZ (PG) */}
+                    {learningStep === 2 && (
+                      <div className="max-w-3xl mx-auto space-y-6">
+                        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                          <h3 className="text-lg font-bold text-slate-800 mb-1">Kuis Pilihan Ganda (PG)</h3>
+                          <p className="text-xs text-slate-500 mb-6">Pilih salah satu jawaban yang paling tepat dari pertanyaan di bawah ini.</p>
+
+                          <div className="space-y-6">
+                            {COURSE_DATA[activeModule].quiz.map((q, qIdx) => (
+                              <div key={qIdx} className="p-5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+                                <p className="font-semibold text-slate-800 text-sm">{qIdx + 1}. {q.q}</p>
+                                <div className="grid grid-cols-1 gap-2 pt-1">
+                                  {q.options.map((opt, optIdx) => (
+                                    <label 
+                                      key={optIdx} 
+                                      className={`flex items-center p-3 rounded-xl border text-xs cursor-pointer transition ${
+                                        quizAnswers[qIdx] === optIdx 
+                                          ? 'bg-indigo-50 border-indigo-500 text-indigo-900 font-bold' 
+                                          : 'bg-white border-slate-200 hover:bg-slate-100 text-slate-700'
+                                      }`}>
+                                      <input 
+                                        type="radio" 
+                                        name={`quiz_${qIdx}`}
+                                        checked={quizAnswers[qIdx] === optIdx}
+                                        onChange={() => setQuizAnswers({ ...quizAnswers, [qIdx]: optIdx })}
+                                        className="mr-3 text-indigo-600 focus:ring-indigo-500"
+                                      />
+                                      <span>{opt}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="mt-8 flex justify-end">
+                            <button 
+                              onClick={() => setLearningStep(3)}
+                              disabled={Object.keys(quizAnswers).length < COURSE_DATA[activeModule].quiz.length}
+                              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md transition disabled:opacity-50">
+                              Lanjut ke Soal Esai <i className="fas fa-arrow-right ml-2"></i>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* STEP 3: ESSAY QUESTIONS & FINAL SUBMISSION */}
+                    {learningStep === 3 && (
+                      <div className="max-w-3xl mx-auto space-y-6">
+                        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-6">
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-800 mb-1">Soal Uraian Esai</h3>
+                            <p className="text-xs text-slate-500">Jawablah pertanyaan berikut dengan penjelasan yang singkat, padat, dan komprehensif.</p>
+                          </div>
+
+                          <div className="space-y-6">
+                            {COURSE_DATA[activeModule].essay.map((eItem, eIdx) => (
+                              <div key={eIdx} className="p-5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+                                <label className="block font-semibold text-slate-800 text-sm">
+                                  {eIdx + 1}. {eItem.q}
+                                </label>
+                                <textarea 
+                                  rows="4"
+                                  value={essayAnswers[eIdx] || ''}
+                                  onChange={(e) => setEssayAnswers({ ...essayAnswers, [eIdx]: e.target.value })}
+                                  placeholder="Tuliskan jawaban esaimu secara mendalam di sini..."
+                                  className="w-full p-3.5 bg-white border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                                ></textarea>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Submit Action Block */}
+                          <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+                            <button 
+                              onClick={() => setLearningStep(2)}
+                              className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold rounded-xl text-xs transition">
+                              <i className="fas fa-arrow-left mr-2"></i> Kembali ke Kuis
+                            </button>
+
+                            <button 
+                              onClick={submitQuiz}
+                              disabled={isSubmitting}
+                              className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-lg shadow-emerald-600/20 transition flex items-center gap-2">
+                              {isSubmitting ? (
+                                <>
+                                  <i className="fas fa-spinner fa-spin"></i>
+                                  <span>Mengirim Jawaban...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <i className="fas fa-paper-plane"></i>
+                                  <span>Kirim Seluruh Jawaban ke Guru</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Quiz Score Summary Card after Submission */}
+                        {quizScore !== null && (
+                          <div className="bg-emerald-50 rounded-2xl p-6 border border-emerald-200 text-emerald-900 space-y-3 text-center animate-fade-in">
+                            <div className="w-14 h-14 mx-auto rounded-full bg-emerald-500 text-white flex items-center justify-center text-2xl shadow-md">
+                              <i className="fas fa-check"></i>
+                            </div>
+                            <h4 className="text-xl font-bold">Jawaban Berhasil Terkirim!</h4>
+                            <p className="text-xs text-emerald-700">
+                              Nilai Pilihan Ganda kamu: <strong className="text-emerald-900 text-base">{quizScore} / 100</strong>. 
+                              Jawaban esaimu telah diteruskan ke Guru untuk dikoreksi.
+                            </p>
+                            <button 
+                              onClick={() => setCurrentView('dashboard')}
+                              className="mt-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition inline-block">
+                              Kembali ke Dashboard Utama
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 4. TEACHER / ADMIN DASHBOARD VIEW */}
+                {currentView === 'dashboard' && currentUser?.role === 'admin' && (
+                  <div className="space-y-6 animate-fade-in">
+                    {/* Admin Header */}
+                    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div>
+                        <span className="px-2.5 py-1 rounded-md bg-purple-100 text-purple-700 text-[11px] font-bold uppercase tracking-wider">
+                          Panel Guru Administrator
+                        </span>
+                        <h2 className="text-2xl font-black text-slate-800 mt-1">Manajemen & Evaluasi Kelas 9</h2>
+                      </div>
+
+                      {/* Navigation Tabs */}
+                      <div className="flex flex-wrap gap-2 bg-slate-100 p-1.5 rounded-xl text-xs font-bold">
+                        <button 
+                          onClick={() => setAdminTab('infografis')}
+                          className={`px-3.5 py-2 rounded-lg transition ${adminTab === 'infografis' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          <i className="fas fa-chart-pie mr-1.5"></i> Infografis
+                        </button>
+                        <button 
+                          onClick={() => setAdminTab('rekap')}
+                          className={`px-3.5 py-2 rounded-lg transition ${adminTab === 'rekap' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          <i className="fas fa-table mr-1.5"></i> Rekap Nilai
+                        </button>
+                        <button 
+                          onClick={() => setAdminTab('koreksi')}
+                          className={`px-3.5 py-2 rounded-lg transition relative ${adminTab === 'koreksi' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          <i className="fas fa-pen-nib mr-1.5"></i> Koreksi Esai
+                          {pendingCorrectionList.length > 0 && (
+                            <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-rose-500 text-white text-[10px]">
+                              {pendingCorrectionList.length}
+                            </span>
+                          )}
+                        </button>
+                        <button 
+                          onClick={() => setAdminTab('belum_mengerjakan')}
+                          className={`px-3.5 py-2 rounded-lg transition ${adminTab === 'belum_mengerjakan' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          <i className="fas fa-user-clock mr-1.5"></i> Belum Tugas
+                        </button>
+                        <button 
+                          onClick={() => setAdminTab('siswa')}
+                          className={`px-3.5 py-2 rounded-lg transition ${adminTab === 'siswa' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          <i className="fas fa-users mr-1.5"></i> Data Siswa
+                        </button>
+                        <button 
+                          onClick={() => setAdminTab('gsheet')}
+                          className={`px-3.5 py-2 rounded-lg transition ${adminTab === 'gsheet' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                          <i className="fas fa-file-excel mr-1.5"></i> Google Sheets
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* TAB 1: INFOGRAFIS & STATISTIK */}
+                    {adminTab === 'infografis' && (
+                      <div className="space-y-6">
+                        {/* Key Metrics Cards */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                              <p className="text-xs font-bold text-slate-400 uppercase">Total Siswa</p>
+                              <h3 className="text-2xl font-black text-slate-800 mt-1">{studentsList.length}</h3>
+                            </div>
+                            <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl">
+                              <i className="fas fa-user-graduate"></i>
+                            </div>
+                          </div>
+
+                          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                              <p className="text-xs font-bold text-slate-400 uppercase">Tugas Dikirim</p>
+                              <h3 className="text-2xl font-black text-slate-800 mt-1">{resultsData.length}</h3>
+                            </div>
+                            <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl">
+                              <i className="fas fa-paper-plane"></i>
+                            </div>
+                          </div>
+
+                          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                              <p className="text-xs font-bold text-slate-400 uppercase">Perlu Koreksi Esai</p>
+                              <h3 className="text-2xl font-black text-rose-600 mt-1">{pendingCorrectionList.length}</h3>
+                            </div>
+                            <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center text-xl">
+                              <i className="fas fa-edit"></i>
+                            </div>
+                          </div>
+
+                          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                              <p className="text-xs font-bold text-slate-400 uppercase">Rata-rata Nilai PG</p>
+                              <h3 className="text-2xl font-black text-purple-600 mt-1">
+                                {resultsData.length > 0 
+                                  ? Math.round(resultsData.reduce((acc, curr) => acc + curr.scorePG, 0) / resultsData.length) 
+                                  : 0}
+                              </h3>
+                            </div>
+                            <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center text-xl">
+                              <i className="fas fa-award"></i>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Module Progress Breakdown */}
+                        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                          <h3 className="text-base font-bold text-slate-800 mb-4">Progres Pengumpulan Per Modul</h3>
+                          <div className="space-y-4">
+                            {Object.values(COURSE_DATA).map(c => {
+                              const submissions = resultsData.filter(r => r.module === c.title).length;
+                              const percentage = Math.min(100, Math.round((submissions / Math.max(1, studentsList.length)) * 100));
+                              return (
+                                <div key={c.id} className="space-y-1.5">
+                                  <div className="flex justify-between text-xs font-semibold">
+                                    <span className="text-slate-700">{c.title}</span>
+                                    <span className="text-slate-500">{submissions} / {studentsList.length} Siswa ({percentage}%)</span>
+                                  </div>
+                                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                                    <div 
+                                      className={`h-full bg-gradient-to-r ${c.color} transition-all duration-500`}
+                                      style={{ width: `${percentage}%` }}>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* TAB 2: REKAP NILAI & EXPORT */}
+                    {adminTab === 'rekap' && (
+                      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4 p-6">
+                        {/* Filters & Actions Bar */}
+                        <div className="flex flex-col sm:flex-row justify-between gap-4">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <input 
+                              type="text" 
+                              value={searchTerm}
+                              onChange={(e) => setSearchTerm(e.target.value)}
+                              placeholder="Cari NIS atau Nama Siswa..."
+                              className="px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64"
+                            />
+
+                            <select 
+                              value={classFilter}
+                              onChange={(e) => setClassFilter(e.target.value)}
+                              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                              <option value="semua">Semua Kelas</option>
+                              <option value="9A">Kelas 9A</option>
+                              <option value="9B">Kelas 9B</option>
+                              <option value="9C">Kelas 9C</option>
+                            </select>
+                          </div>
+
+                          <button 
+                            onClick={exportToCSV}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-md transition flex items-center gap-2">
+                            <i className="fas fa-file-csv text-sm"></i>
+                            <span>Unduh Rekap CSV</span>
+                          </button>
+                        </div>
+
+                        {/* Grades Table */}
+                        <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold border-b border-slate-200">
+                              <tr>
+                                <th className="p-3.5">NIS</th>
+                                <th className="p-3.5">Nama Siswa</th>
+                                <th className="p-3.5">Kelas</th>
+                                <th className="p-3.5">Modul</th>
+                                <th className="p-3.5 text-center">Nilai PG</th>
+                                <th className="p-3.5 text-center">Nilai Esai</th>
+                                <th className="p-3.5 text-center">Nilai Akhir</th>
+                                <th className="p-3.5 text-center">Aksi</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 font-medium">
+                              {filteredResults.length === 0 ? (
+                                <tr>
+                                  <td colSpan="8" className="p-8 text-center text-slate-400">Belum ada data nilai tersimpan.</td>
+                                </tr>
+                              ) : (
+                                filteredResults.map(row => {
+                                  const scoreEsaiVal = row.scoreEsai !== null && row.scoreEsai !== undefined ? row.scoreEsai : null;
+                                  const finalScore = scoreEsaiVal !== null 
+                                    ? Math.round((row.scorePG * 0.4) + (scoreEsaiVal * 0.6)) 
+                                    : row.scorePG;
+
+                                  return (
+                                    <tr key={row.id} className="hover:bg-slate-50/80 transition">
+                                      <td className="p-3.5 font-bold text-slate-700">{row.nis}</td>
+                                      <td className="p-3.5 text-slate-900 font-bold">{row.nama}</td>
+                                      <td className="p-3.5"><span className="px-2 py-0.5 rounded bg-slate-100 font-bold text-slate-600">{row.kelas}</span></td>
+                                      <td className="p-3.5 text-slate-600">{row.module}</td>
+                                      <td className="p-3.5 text-center font-bold text-slate-800">{row.scorePG}</td>
+                                      <td className="p-3.5 text-center">
+                                        {scoreEsaiVal !== null ? (
+                                          <span className="font-bold text-indigo-600">{scoreEsaiVal}</span>
+                                        ) : (
+                                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold">Belum Dikoreksi</span>
+                                        )}
+                                      </td>
+                                      <td className="p-3.5 text-center">
+                                        <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 font-extrabold text-xs">
+                                          {finalScore}
+                                        </span>
+                                      </td>
+                                      <td className="p-3.5 text-center">
+                                        <button 
+                                          onClick={() => handleDeleteResult(row.id)}
+                                          className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition inline-flex items-center justify-center">
+                                          <i className="fas fa-trash-alt"></i>
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* TAB 3: KOREKSI ESAI & AI AUTO-GRADER */}
+                    {adminTab === 'koreksi' && (
+                      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+                        <h3 className="text-lg font-bold text-slate-800">Lembar Koreksi Jawaban Esai Siswa</h3>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {pendingCorrectionList.length === 0 ? (
+                            <div className="col-span-2 p-12 text-center text-slate-400 border-2 border-dashed border-slate-200 rounded-2xl">
+                              <i className="fas fa-check-circle text-4xl text-emerald-400 mb-2"></i>
+                              <p className="font-bold text-slate-600">Semua tugas esai telah dikoreksi!</p>
+                            </div>
+                          ) : (
+                            pendingCorrectionList.map(item => (
+                              <div key={item.id} className="p-5 rounded-2xl border border-slate-200 bg-slate-50 space-y-3">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <h4 className="font-bold text-slate-900 text-sm">{item.nama} ({item.nis})</h4>
+                                    <p className="text-xs text-slate-500">Kelas {item.kelas} • {item.module}</p>
+                                  </div>
+                                  <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">
+                                    Perlu Dikoreksi
+                                  </span>
+                                </div>
+
+                                <button 
+                                  onClick={() => {
+                                    setSelectedEssayData(item);
+                                    setEssayScoreInput(item.scoreEsai !== null ? item.scoreEsai.toString() : '');
+                                    setEssayFeedbackInput(item.feedbackEsai || '');
+                                  }}
+                                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition shadow-sm">
+                                  Buka Lembar Jawab & AI Grader
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* TAB 4: SISWA BELUM MENGERJAKAN TUGAS */}
+                    {adminTab === 'belum_mengerjakan' && (
+                      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                          <h3 className="text-lg font-bold text-slate-800">Siswa Belum Mengirim Tugas</h3>
+
+                          <div className="flex items-center gap-3">
+                            <select 
+                              value={pendingModuleFilter}
+                              onChange={(e) => setPendingModuleFilter(e.target.value)}
+                              className="px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                              <option value="semua">Pilih Modul Pembelajaran...</option>
+                              {Object.values(COURSE_DATA).map(c => (
+                                <option key={c.id} value={c.id}>{c.title}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        {pendingModuleFilter === 'semua' ? (
+                          <div className="p-8 text-center text-slate-400 border border-slate-100 rounded-xl">
+                            Silakan pilih modul pembelajaran di atas untuk melihat daftar siswa yang belum mengumpulkan.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold">
+                                <tr>
+                                  <th className="p-3.5">NIS</th>
+                                  <th className="p-3.5">Nama Siswa</th>
+                                  <th className="p-3.5">Kelas</th>
+                                  <th className="p-3.5">Jenis Kelamin</th>
+                                  <th className="p-3.5 text-center">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {studentsNotSubmitted.length === 0 ? (
+                                  <tr>
+                                    <td colSpan="5" className="p-6 text-center text-emerald-600 font-bold">
+                                      🎉 Luar biasa! Seluruh siswa telah mengumpulkan tugas modul ini!
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  studentsNotSubmitted.map(s => (
+                                    <tr key={s.nis} className="hover:bg-slate-50">
+                                      <td className="p-3.5 font-bold text-slate-700">{s.nis}</td>
+                                      <td className="p-3.5 font-bold text-slate-900">{s.nama}</td>
+                                      <td className="p-3.5">{s.kelas}</td>
+                                      <td className="p-3.5">{s.jk === 'L' ? 'Laki-laki' : 'Perempuan'}</td>
+                                      <td className="p-3.5 text-center">
+                                        <span className="px-2.5 py-1 rounded-full bg-rose-50 text-rose-600 border border-rose-200 font-bold text-[10px]">
+                                          Belum Mengumpulkan
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* TAB 5: MANAJEMEN SISWA */}
+                    {adminTab === 'siswa' && (
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        {/* Add Student Form */}
+                        <div className="lg:col-span-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm h-fit space-y-4">
+                          <h3 className="text-base font-bold text-slate-800">Tambah Siswa Baru</h3>
+                          <form onSubmit={handleAddStudent} className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-600 uppercase mb-1">NIS Siswa</label>
+                              <input 
+                                type="text" 
+                                required
+                                value={newNis}
+                                onChange={(e) => setNewNis(e.target.value)}
+                                placeholder="cth: 21400"
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Nama Lengkap</label>
+                              <input 
+                                type="text" 
+                                required
+                                value={newNama}
+                                onChange={(e) => setNewNama(e.target.value)}
+                                placeholder="Nama siswa..."
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Kelas</label>
+                                <select 
+                                  value={newKelas}
+                                  onChange={(e) => setNewKelas(e.target.value)}
+                                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                  <option value="9A">9A</option>
+                                  <option value="9B">9B</option>
+                                  <option value="9C">9C</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-slate-600 uppercase mb-1">JK</label>
+                                <select 
+                                  value={newJk}
+                                  onChange={(e) => setNewJk(e.target.value)}
+                                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                  <option value="L">Laki-laki</option>
+                                  <option value="P">Perempuan</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            <button 
+                              type="submit"
+                              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md transition">
+                              Simpan Siswa Baru
+                            </button>
+                          </form>
+                        </div>
+
+                        {/* Student Database Table */}
+                        <div className="lg:col-span-8 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                          <h3 className="text-base font-bold text-slate-800">Daftar Terdaftar ({studentsList.length} Siswa)</h3>
+                          <div className="overflow-x-auto border border-slate-200 rounded-xl max-h-[450px]">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold sticky top-0">
+                                <tr>
+                                  <th className="p-3.5">NIS</th>
+                                  <th className="p-3.5">Nama Siswa</th>
+                                  <th className="p-3.5">Kelas</th>
+                                  <th className="p-3.5">JK</th>
+                                  <th className="p-3.5 text-center">Aksi</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {studentsList.map(s => (
+                                  <tr key={s.nis} className="hover:bg-slate-50">
+                                    <td className="p-3.5 font-bold text-slate-700">{s.nis}</td>
+                                    <td className="p-3.5 font-bold text-slate-900">{s.nama}</td>
+                                    <td className="p-3.5">{s.kelas}</td>
+                                    <td className="p-3.5">{s.jk}</td>
+                                    <td className="p-3.5 text-center">
+                                      <button 
+                                        onClick={() => handleDeleteStudent(s.nis)}
+                                        className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition inline-flex items-center justify-center">
+                                        <i className="fas fa-trash-alt"></i>
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* TAB 6: GOOGLE SHEETS INTEGRATION CONFIGURATION */}
+                    {adminTab === 'gsheet' && (
+                      <div className="max-w-2xl mx-auto bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+                        <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                          <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center text-xl font-bold">
+                            <i className="fas fa-file-excel"></i>
+                          </div>
+                          <div>
+                            <h3 className="text-base font-bold text-slate-800">Integrasi Otomatis Google Sheets</h3>
+                            <p className="text-xs text-slate-500">Sinkronisasi otomatis hasil jawaban siswa langsung ke Google Spreadsheet</p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="block text-xs font-bold text-slate-700 uppercase">URL WebApp Apps Script</label>
+                          <input 
+                            type="text" 
+                            value={gscriptUrl}
+                            onChange={(e) => setGscriptUrl(e.target.value)}
+                            placeholder="https://script.google.com/macros/s/.../exec"
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                          />
+                          <p className="text-[11px] text-slate-500 leading-relaxed">
+                            Tempelkan URL eksekusi Google Apps Script (Web App Deployment) di atas. Setiap siswa mengumpulkan kuis atau esai, hasilnya akan otomatis terkirim tanpa menekan tombol export.
+                          </p>
+                        </div>
+
+                        <button 
+                          onClick={() => handleSaveGscriptUrl(gscriptUrl)}
+                          className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-md transition">
+                          Simpan URL WebApp Google Sheets
+                        </button>
+                      </div>
+                    )}
+
+                    {/* ESSAY GRADING & AI AUTO-GRADER MODAL */}
+                    {selectedEssayData && (
+                      <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+                        <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-100 space-y-6 max-h-[90vh] overflow-y-auto">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                            <div>
+                              <h3 className="text-lg font-bold text-slate-800">Koreksi Lembar Jawab Esai</h3>
+                              <p className="text-xs text-slate-500">{selectedEssayData.nama} ({selectedEssayData.nis}) • Modul {selectedEssayData.module}</p>
+                            </div>
+                            <button 
+                              onClick={() => setSelectedEssayData(null)}
+                              className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center">
+                              <i className="fas fa-times"></i>
+                            </button>
+                          </div>
+
+                          {/* Submitted Essay Answers */}
+                          <div className="space-y-4">
+                            {selectedEssayData.essayData?.map((item, idx) => (
+                              <div key={idx} className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                                <p className="font-bold text-slate-800">Soal {idx + 1}: {item.question}</p>
+                                <div className="p-3 bg-white rounded-lg border border-slate-200 text-slate-700 font-medium whitespace-pre-line">
+                                  {item.answer}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* AI Auto-Grader Action */}
+                          <div className="p-4 bg-purple-50 rounded-2xl border border-purple-200 flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center text-lg shadow-md">
+                                <i className="fas fa-robot"></i>
+                              </div>
+                              <div>
+                                <h4 className="font-bold text-xs text-purple-900">AI Auto-Grader (Gemini)</h4>
+                                <p className="text-[11px] text-purple-700">Analisis otomatis kualitas jawaban & beri rekomendasi nilai</p>
+                              </div>
+                            </div>
+
+                            <button 
+                              onClick={handleAiGrader}
+                              disabled={isAiGrading}
+                              className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs shadow-md transition disabled:opacity-50 flex items-center gap-2">
+                              {isAiGrading ? (
+                                <>
+                                  <i className="fas fa-spinner fa-spin"></i>
+                                  <span>Menganalisis...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <i className="fas fa-sparkles"></i>
+                                  <span>Jalankan AI Grader</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Teacher Manual Input Score & Feedback */}
+                          <div className="space-y-4 pt-2">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Total Nilai Esai (0 - 100)</label>
+                              <input 
+                                type="number" 
+                                min="0" 
+                                max="100"
+                                value={essayScoreInput}
+                                onChange={(e) => setEssayScoreInput(e.target.value)}
+                                placeholder="cth: 85"
+                                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Catatan Umpan Balik Guru</label>
+                              <textarea 
+                                rows="3"
+                                value={essayFeedbackInput}
+                                onChange={(e) => setEssayFeedbackInput(e.target.value)}
+                                placeholder="Tuliskan apresiasi atau penjelasan perbaikan untuk siswa..."
+                                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              ></textarea>
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end gap-3 pt-2">
+                            <button 
+                              onClick={() => setSelectedEssayData(null)}
+                              className="px-4 py-2.5 rounded-xl text-slate-600 bg-slate-100 hover:bg-slate-200 font-semibold text-xs transition">
+                              Batal
+                            </button>
+                            <button 
+                              onClick={handleSaveEssayScore}
+                              className="px-6 py-2.5 rounded-xl text-white bg-indigo-600 hover:bg-indigo-700 font-bold text-xs shadow-md transition">
+                              Simpan Hasil Koreksi
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </main>
+
+              {/* FOOTER */}
+              <footer className="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-400 mt-auto">
+                <p>LMS Informatika Kelas 9 SMP • Kurikulum Merdeka • Powered by Gemini 3 Flash AI</p>
+              </footer>
+            </div>
+          );
+        }
+
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>
